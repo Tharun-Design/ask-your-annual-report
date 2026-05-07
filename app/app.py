@@ -119,21 +119,29 @@ def get_casual_response(trigger):
 
 # ── prompts ───────────────────────────────────────────────────
 PROMPT_TEMPLATE = """
-You are a professional financial analyst assistant. Answer the question using ONLY
-the context provided from SEC 10-K filings below.
+You are a senior financial analyst with deep expertise in technology companies. 
+You have thoroughly studied the 2025 annual reports (10-K filings) of Apple, Microsoft, and Tesla.
 
-Rules:
-- Cite the company name and page number for every fact you state
-- If the answer is not in the context, say "I don't have enough information in the provided filings to answer this."
-- Be concise and factual — no speculation
-- For comparison questions, clearly structure your answer by company
+Your job is to answer questions like a professional analyst would in a boardroom or client meeting — 
+not like a search engine citing page numbers.
 
-Context:
+Guidelines:
+- Speak with confidence and expertise, like a Goldman Sachs analyst presenting to a client
+- Give direct, insightful answers — lead with the key finding, then support with data
+- Use specific numbers from the filings to back your analysis (e.g. "$416B revenue", "13% gross margin growth")
+- When comparing companies, give your professional assessment of who is stronger and why
+- Add brief analytical commentary — what does this number mean? Is it good or bad? Why does it matter?
+- Write all numbers in plain text: $82,056 million — never LaTeX formatting
+- If the data is genuinely not in your context, say so briefly and move on
+- Never cite page numbers — you are an analyst, not a librarian
+- Never say "based on the provided context" or "according to the filing" — just state the facts confidently
+
+Context from annual reports:
 {context}
 
 Question: {question}
 
-Answer:
+Professional analysis:
 """
 
 EXAMPLE_QUESTIONS = [
@@ -295,13 +303,30 @@ if user_input:
                 intent = classify_intent(user_input, llm)
 
             if intent == "financial":
+
+                # auto-detect comparison questions
+                comparison_words = [
+                    "compare", "versus", "vs", "difference",
+                    "all three", "three companies", "both companies",
+                    "which company", "who has more", "who is better",
+                    "rank", "ranking", "best", "worst", "highest", "lowest"
+                ]
+                is_comparison_question = any(
+                    word in user_input.lower() for word in comparison_words
+                )
+
                 with st.spinner("Analyzing..."):
-                    if compare_mode and len(selected_companies) > 1:
+                    # auto-enable comparison for multi-company questions
+                    if is_comparison_question and len(selected_companies) > 1:
+                        answer, source_docs = run_comparison(
+                            vectorstore, llm, user_input, selected_companies
+                        )
+                    elif compare_mode and len(selected_companies) > 1:
                         answer, source_docs = run_comparison(
                             vectorstore, llm, user_input, selected_companies
                         )
                     else:
-                        chain = build_chain(vectorstore, llm, selected_companies)
+                        chain = build_chain(vectorstore, llm, selected_companies, user_input)
                         result = chain.invoke({"query": user_input})
                         answer = result["result"]
                         source_docs = result["source_documents"]
@@ -309,10 +334,10 @@ if user_input:
                 st.markdown(answer)
                 sources = dedupe_sources(source_docs)
                 if sources:
-                    with st.expander("Sources — 10-K filings"):
+                    with st.expander("📄 Sources"):
                         for s in sources:
                             st.markdown(
-                                f"- **{s['company']}** · Page {s['page']} · `{s['source']}`"
+                                f"- **{s['company']}** · `{s['source']}`"
                             )
                 st.session_state.messages.append({
                     "role": "assistant",
@@ -327,7 +352,7 @@ if user_input:
 
                 st.markdown(answer)
                 if web_sources:
-                    with st.expander("Sources — web search"):
+                    with st.expander("🌐 Sources — web search"):
                         for s in web_sources:
                             st.markdown(f"- [{s['title']}]({s['url']})")
 
